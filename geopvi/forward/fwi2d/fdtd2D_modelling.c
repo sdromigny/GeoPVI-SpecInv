@@ -15,8 +15,8 @@
 #define pi 3.1415926
 
 
-void fwi_2D(char input_file[200], float *vel_inner, float *record_syn, 
-				float *record_obs, float *grad, int run_fwi, int verbose)
+void fwi_2D(char input_file[200], float *vel_inner, float *record_syn, float *record_obs, 
+				float *grad, float *data_mask, int run_fwi, int verbose)
 {
   	//============Time begin====================//
   	//============Time begin====================//
@@ -272,9 +272,15 @@ void fwi_2D(char input_file[200], float *vel_inner, float *record_syn,
 			{
 				record_syn[is*nt*ss[is].r_n+it*ss[is].r_n+ir] = record[it*ss[is].r_n+ir];
 				if(run_fwi)
-					{record[it*ss[is].r_n+ir] -= record_obs[is*nt*ss[is].r_n+it*ss[is].r_n+ir];}
+				{
+					record[it*ss[is].r_n+ir] -= record_obs[is*nt*ss[is].r_n+it*ss[is].r_n+ir];
+					record[it*ss[is].r_n+ir] *= data_mask[is*nt*ss[is].r_n+it*ss[is].r_n+ir];
+				}
 				else
-					{record[it*ss[is].r_n+ir] = record_obs[is*nt*ss[is].r_n+it*ss[is].r_n+ir];}
+				{
+					record[it*ss[is].r_n+ir] = record_obs[is*nt*ss[is].r_n+it*ss[is].r_n+ir];
+					record[it*ss[is].r_n+ir] *= data_mask[is*nt*ss[is].r_n+it*ss[is].r_n+ir];
+				}
 			}
 
 		backward_aco_2D
