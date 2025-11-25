@@ -69,8 +69,8 @@ def prepare_fwi_parameters(paramfile, config):
 
 
 class Posterior():
-    def __init__(self, data, config, vel_fixed = 1950, sigma = 0.1, num_processes = 1, 
-                            log_prior = None, mask = None, paramfile = 'input_params.txt'):
+    def __init__(self, data, config, vel_fixed = 1950, sigma = 0.1, num_processes = 1, log_prior = None, 
+                            mask = None, data_mask = None, paramfile = 'input_params.txt'):
         '''
         data: observed data with shape: (ns*nt*nr,)
         config: configure file used to define nuisance parameters for 2D fwi code
@@ -78,12 +78,14 @@ class Posterior():
         log_prior: a function that takes samples as input and calculates their log-prior values (using PyTorch)
                     Return: y = log_prior(x)
         mask: a mask array where the parameters with mask = 0 will be fixed 
+        data_mask: a mask array that defines which trace (seismogram) is used for fwi: data_mask = 0 means the trace is not used
         sigma: data error/uncertainty
         num_processes: number of process for parallelisation
         paramfile: filename (and full path) that defines parameters for 2D FWI
         '''
         self.data = data
         self.mask = mask
+        self.data_mask = data_mask
         self.log_prior = log_prior
         self.num_processes = num_processes
         self.sigma = sigma
@@ -104,7 +106,7 @@ class Posterior():
         data_syn: synthetic waveform data with shape of (ns*nt*nr,) 1 dim array
         grad: gradient of l2_loss w.r.t. input velocity model with shape of (nz, nx)
         """
-        data_syn, grad = aco2d.fwi(vel, self.data, paramfile = self.paramfile)
+        data_syn, grad = aco2d.fwi(vel, self.data, paramfile = self.paramfile, data_mask = self.data_mask)
         grad = grad[self.mask]
         loss = 0.5 * np.sum((data_syn - self.data)**2)
         return loss, -grad
