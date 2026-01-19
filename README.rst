@@ -14,7 +14,7 @@ Requirements
 --------------
 numpy, torch, cython, dask, scipy
 
-(Note that to run the [``tutorial examples``](examples/tutorials), ``matplotlib`` and ``jupyter notebook`` are also required.)
+(Note: to run the tutorial examples in ``examples/tutorials``, matplotlib and jupyter notebook are also required.)
 
 
 Installation
