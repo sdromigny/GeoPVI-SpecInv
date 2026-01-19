@@ -16,6 +16,9 @@ geopvi/forward/fwi3d_bp
 
 **/fort.12
 
+geopvi/forward/fwi2d/pyacofwi2D.c
+geopvi/forward/tomo2d/pyfmm.c
+
 geopvi/prior_vpr.py
 
 # 3D FWI code related
