@@ -3,4 +3,5 @@ torch
 cython
 dask
 scipy
+seaborn
 git+https://github.com/XuebinZhaoZXB/pysurf96
