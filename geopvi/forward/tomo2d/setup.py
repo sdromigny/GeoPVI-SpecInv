@@ -1,6 +1,6 @@
-from distutils.core import setup
-from distutils.extension import Extension
-from Cython.Distutils import build_ext
+from setuptools import setup, Extension
+from Cython.Build import build_ext
+
 import numpy
 from os import system
 npy_include_dir = numpy.get_include()
