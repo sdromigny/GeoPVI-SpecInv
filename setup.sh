@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "Install dependencies..."
-pip install --upgrade -r requirements.txt
+pip install -r requirements.txt
 echo "Dependencies installation complete"
 
 echo "Build 2d fwi solver..."
