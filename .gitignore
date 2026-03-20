@@ -22,6 +22,7 @@ geopvi/forward/tomo2d/pyfmm.c
 geopvi/prior_vpr.py
 
 examples/tutorials/32_3D_FWI.ipynb
+examples/swi3d/input/stimes.dat
 
 # 3D FWI code related
 **/*tdwi*/
