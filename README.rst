@@ -116,10 +116,12 @@ Examples
 References
 ----------
 If you use GeoPVI in your research, please cite our paper that introduces the package:
+
 - Zhao, X., & Curtis, A. (2026). GeoPVI: a Python Package for Geoscientific Inversion using Parametric Variational Inference. Geophysical Journal International.
 
 Below are some of the papers that introduce the variational inference methods implemented in GeoPVI and their applications in geophysics. 
 Please also consider citing these papers if you use the corresponding methods in your research:
+
 - Zhao, X., Curtis, A. & Zhang, X. (2022). Bayesian seismic tomography using normalizing flows. Geophysical Journal International, 228 (1), 213-239.
 - Zhao, X., & Curtis, A. (2024). Bayesian inversion, uncertainty analysis and interrogation using boosting variational inference. Journal of Geophysical Research: Solid Earth 129 (1), e2023JB027789.
 - Zhao, X., & Curtis, A. (2024). Physically Structured Variational Inference for Bayesian Full Waveform Inversion. Journal of Geophysical Research: Solid Earth 129 (11), e2024JB029557.
