@@ -113,13 +113,16 @@ Examples
 - Other implementation examples (currently including 1D surface wave dispersion inversion and vertical electrical sounding inversion) can be found in ``examples/tutorials``.
 
 
-References
+Citation
 ----------
 If you use GeoPVI in your research, please cite our paper that introduces the package:
 
-- Zhao, X., & Curtis, A. (2026). GeoPVI: a Python Package for Geoscientific Inversion using Parametric Variational Inference. Geophysical Journal International.
+- Zhao, X., & Curtis, A. (2026). GeoPVI: a Python Package for Geoscientific Inversion using Parametric Variational Inference. Geophysical Journal International, in press.
 
-Below are some of the papers that introduce the variational inference methods implemented in GeoPVI and their applications in geophysics. 
+
+References
+----------
+Below are relevant papers that introduce the variational methods implemented in GeoPVI and their applications in geophysics. 
 Please also consider citing these papers if you use the corresponding methods in your research:
 
 - Zhao, X., Curtis, A. & Zhang, X. (2022). Bayesian seismic tomography using normalizing flows. Geophysical Journal International, 228 (1), 213-239.
