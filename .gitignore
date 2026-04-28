@@ -60,3 +60,5 @@ examples/swi3d/input/stimes.dat
 
 # figures
 *.jpg
+
+*.npy
