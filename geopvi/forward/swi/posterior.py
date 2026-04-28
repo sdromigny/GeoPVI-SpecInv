@@ -250,38 +250,42 @@ class Posterior3D_spec(nn.Module):
 
         return log_like.squeeze()
 
-    # ------------------------------------------------------------------ #
-    #  Full forward pass                                                   #
-    # ------------------------------------------------------------------ #
-
     def log_prob(self, Vs_flat):
         """
-        Vs_flat : (Ngrid * nlayer,) or (Ngrid, nlayer) tensor with requires_grad=True
+        Vs_flat : (B, Ngrid * nlayer)
 
         Returns
-        ───────
-        log_posterior : scalar tensor
-            Call .backward() on it to populate Vs_flat.grad
+        -------
+        log_posterior : (B,)
         """
+        B = Vs_flat.shape[0]
         nlayer = len(self.thick)
-        Vs = Vs_flat.reshape(self.Ngrid, nlayer)   # (Ngrid, nlayer)
 
-        # 1. dispersion per cell
-        c_true = self._dispersion_all_cells(Vs)    # (Ngrid, Nperiods)
+        # reshape to (B, Ngrid, nlayer)
+        Vs = Vs_flat.reshape(B, self.Ngrid, nlayer)
 
-        # 2. subarray averaging
-        c_pred = self._apply_A(c_true)             # (Nobs,  Nperiods)
+        logps = []
 
-        # 3. likelihood
-        log_like = self._spectrum_loglike(c_pred)  # scalar
+        for b in range(B):
+            # 1. dispersion
+            c_true = self._dispersion_all_cells(Vs[b])   # (Ngrid, Nperiods)
 
-        # 4. prior (optional)
-        if self.log_prior is not None:
-            log_post = log_like + self.log_prior(Vs_flat)
-        else:
-            log_post = log_like
+            # 2. apply A
+            c_pred = self._apply_A(c_true)               # (Nobs, Nperiods)
 
-        return log_post
+            # 3. likelihood
+            log_like = self._spectrum_loglike(c_pred)    # scalar
+
+            # 4. prior
+            if self.log_prior is not None:
+                log_prior = self.log_prior(Vs_flat)   # (B,)
+                return log_like + log_prior
+            else:
+                log_post = log_like
+
+            logps.append(log_post)
+
+        return torch.stack(logps)   # (B,)
 
 
 class Posterior3D_dc():

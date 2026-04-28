@@ -64,3 +64,6 @@ examples/swi3d/input/stimes.dat
 *.npy
 *.png
 *.txt
+
+*.pt
+*.ini

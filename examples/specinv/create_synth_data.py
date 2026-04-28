@@ -20,9 +20,47 @@ def build_spectrum(c_obs, c_axis, sigma_c):
     return E
 
 # Load true Vs model
-Vs_true=np.load("/home/sixtine/Documents/SANT/GeoPVI-SpecInv/examples/specinv/input/vs3d_true_xyz.npy")
+# Vs_true=np.load("/home/sixtine/Documents/SANT/GeoPVI-SpecInv/examples/specinv/input/vs3d_true_xyz.npy")
+
+import numpy as np
+
+def build_synthetic_vs(nx=29, ny=28, nz=20):
+    # --- coordinates ---
+    x = np.linspace(-1, 1, nx)
+    y = np.linspace(-1, 1, ny)
+    z = np.linspace(0, 1, nz)   # depth normalized
+
+    X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+
+    # --- background: increasing with depth ---
+    Vs_bg = 2.0 + 1.0 * Z   # from ~2.0 to ~3.0 km/s
+
+    # --- low velocity anomaly (centered) ---
+    low_anomaly = -0.5 * np.exp(
+        -((X/0.4)**2 + (Y/0.4)**2 + ((Z-0.5)/0.3)**2)
+    )
+
+    # --- high velocity anomaly (slightly offset) ---
+    high_anomaly = +0.4 * np.exp(
+        -(((X-0.4)/0.3)**2 + ((Y+0.3)/0.3)**2 + ((Z-0.6)/0.2)**2)
+    )
+
+    Vs = Vs_bg + low_anomaly + high_anomaly
+
+    return Vs
+
+
+Vs_true = build_synthetic_vs(10, 10, 20)
 
 print(Vs_true.shape)
+
+import matplotlib.pyplot as plt
+
+plt.figure()
+plt.imshow(Vs_true[:, :, 20//2].T, origin='lower')
+plt.colorbar(label="Vs (km/s)")
+plt.title("Mid-depth slice")
+plt.savefig("results/true_vel.png")
 
 
 # Define periods in seconds, and grid dimensions
@@ -68,11 +106,13 @@ stations=define_station_geometry(
     margin=0,
     line_axis="x",)
 
+radius=2
+
 A, centers, pair_counts = build_A_subarrays(
     x,   # 1D
     y,   # 1D
     stations,
-    radius=3,
+    radius=radius,
     n_samples=100
 )
 
@@ -89,7 +129,13 @@ c_axis = np.linspace(0.5, 4, 200)
 
 Nobs = c_obs.shape[0]
 
-# Spectra
+
+import os
+
+out_dir = "/home/sixtine/Documents/SANT/GeoPVI-SpecInv/examples/specinv/input/spectra_nodes"
+os.makedirs(out_dir, exist_ok=True)
+
+
 spectra = []
 
 for p in range(Nobs):
@@ -105,11 +151,47 @@ for p in range(Nobs):
     E += 0.01 * np.random.randn(*E.shape)
     E = np.clip(E, 0, None)
 
-    spectra.append({
-        "E": E,
-        "c_axis": c_axis,
-        "idx": p   # 👈 CRITICAL
+    # --- get spatial coordinates ---
+    ix = p // ny
+    iy = p % ny
+
+    xp = x[ix]
+    yp = y[iy]
+
+    # --- package data ---
+    spec_dict = {
+        "E": E.astype(np.float32),
+        "c_axis": c_axis.astype(np.float32),
+        "periods": periods.astype(np.float32),
+        "c_obs": c_obs[p].astype(np.float32),
+        "c_true": c_true[p].astype(np.float32),
+        "idx": int(p),
+        "x": float(xp),
+        "y": float(yp),
+        "pair_count": int(pair_counts[p]),
+        "radius": float(radius),
+        "A_row": A[p].astype(np.float32),
+    }
+
+    # --- save ---
+    fname = os.path.join(out_dir, f"spectrum_node_{p:04d}.npy")
+    np.save(fname, spec_dict)
+
+    spectra.append(spec_dict)
+
+np.save(os.path.join(out_dir, "valid_mask.npy"), valid)
+
+index = []
+
+for spec in spectra:
+    index.append({
+        "idx": spec["idx"],
+        "x": spec["x"],
+        "y": spec["y"],
+        "file": f"spectrum_node_{spec['idx']:04d}.npy"
     })
+
+np.save(os.path.join(out_dir, "index.npy"), index)
 
 spec = spectra[0]   # pick any valid one
 p = spec["idx"]
@@ -165,4 +247,3 @@ for i, p in enumerate([0, Ngrid//4, Ngrid//2, 3*Ngrid//4]):
 plt.suptitle("Example averaging kernels")
 plt.savefig("A_kernels.png")
 
-np.save('/home/sixtine/Documents/SANT/GeoPVI-SpecInv/examples/specinv/input/specs.npy',E)

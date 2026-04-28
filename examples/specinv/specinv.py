@@ -7,10 +7,11 @@ from argparse import ArgumentParser
 import configparser
 import time
 from datetime import datetime
+import glob
 
 from geopvi.nfvi.models import FlowsBasedDistribution, VariationalInversion
 from geopvi.nfvi.flows import Real2Constr, Constr2Real, Linear
-from geopvi.forward.swi.posterior import Posterior3D_dc, Posterior3D_tt
+from geopvi.forward.swi.posterior import Posterior3D_spec
 from geopvi.utils import smooth_matrix_3D as smooth_matrix
 
 
@@ -104,11 +105,11 @@ if __name__ == "__main__":
     argparser.add_argument("--kernel_size", default=5, type=int, help='Local covariance kernel size if PSVI is performed')
     argparser.add_argument("--nflow", default=1, type=int, help='number of flows')
     argparser.add_argument("--nsample", default=8, type=int, help='number of samples for MC integration during each iteration')
-    argparser.add_argument("--prcs", default=48, type=int, help='number of processes in parallel to perform forward evaluation')
-    argparser.add_argument("--iterations", default=20000, type=int, help='number of iterations to update variational parameters')
+    argparser.add_argument("--prcs", default=4, type=int, help='number of processes in parallel to perform forward evaluation')
+    argparser.add_argument("--iterations", default=10000, type=int, help='number of iterations to update variational parameters')
     argparser.add_argument("--lr", default=0.001, type=float, help='learning rate')
     argparser.add_argument("--ini_dist", default='Normal', type=str, help='initial (base) distribution for flows-based model')
-    argparser.add_argument("--sigma_scale", default=1, type=float, help='scale factor for data noise level')
+    argparser.add_argument("--sigma_scale", default=0.05, type=float, help='scale factor for data noise level')
 
     argparser.add_argument("--v0_std", default=0.15, type=float, help='Std value when defing prior informaton')
     argparser.add_argument("--smooth", default=False, type=bool, help='Whether to apply smooth factor on model vector m')
@@ -122,9 +123,6 @@ if __name__ == "__main__":
     argparser.add_argument("--datatype", default='spectrum', type=str, help='Use spectrum at different grid nodes as observed data')
 
     argparser.add_argument("--config", default='config_grid3.ini', type=str, help='filename containing parameters for forward simulation')
-    argparser.add_argument("--srcfile", default='sources_58.txt', type=str, help='filename for (x, y) source locations')
-    argparser.add_argument("--recfile", default='sources_58.txt', type=str, help='filename for (x, y) source locations')
-    argparser.add_argument("--datafile", default='otimes_src58', type=str, help='filename for observed dataset')
 
     # argparser.add_argument("--datafile", default='stimes.dat', type=str, help='filename for observed dataset')
 
@@ -159,32 +157,51 @@ if __name__ == "__main__":
             print(f'Structured Gaussian kernel size is: {args.kernel_size}')
     print(f'The initial distribution is {args.ini_dist} distribution\n')
 
-    ## define FMM config
-    if args.datatype == 'spectrum':
-        print(f'Config file for spectrum is: basepath/input/{args.config}')
-        fmm_config_name = args.basepath + 'input/' + args.config
-        config = configparser.ConfigParser()
-        config._interpolation = configparser.ExtendedInterpolation()
-        config.read(fmm_config_name)
 
     # create output folder
     Path(args.basepath + args.outdir).mkdir(parents=True, exist_ok=True)
 
+    config_name = args.basepath + 'input/' + args.config
+    config = configparser.ConfigParser()
+    config._interpolation = configparser.ExtendedInterpolation()
+    config.read(config_name)
 
-    # load observed data
-    if args.datatype == 'spectrum':
-        print('Use spectrum data for inversion\n')
+    ny = config.getint('grid','ny')
+    nx = config.getint('grid','nx')
+
+
 
     if args.datatype == 'spectrum':
         print('Use spectrum for inversion\n')
-        with open(args.basepath + 'input/' + args.datafile) as f:
-            nx, ny, nperiods = np.loadtxt(f, max_rows = 1).astype('int') # better to load from config?
-            periods = np.loadtxt(f, max_rows = 1)
-            data_obs = np.loadtxt(f, max_rows = nx * ny) # load spectrum
-            sigma = np.loadtxt(f) / args.sigma_scale # prior for sigma
 
+        spec_dir = os.path.join(args.basepath, "input/spectra_nodes")
+
+        index = np.load(os.path.join(spec_dir, "index.npy"), allow_pickle=True)
+
+        spectra = []
+        indices = []
+
+        for entry in index:
+            fpath = os.path.join(spec_dir, entry["file"])
+            d = np.load(fpath, allow_pickle=True).item()
+
+            spectra.append({
+                "energy": d["E"],
+                "c_axis": d["c_axis"]
+            })
+
+            indices.append(entry["idx"])
+
+        indices = np.array(indices)
+
+        # Load A
+        A_full = np.load(os.path.join(args.basepath, "input", "A_matrix.npy"))
+        A = A_full[indices]
+
+        # Periods
+        periods = np.load(fpath, allow_pickle=True).item()["periods"]
     else:
-        raise ValueError('Invalid data type, use either traveltime or dispersion')
+        raise ValueError('Invalid data type')
 
 
     # define Bayesian prior and posterior pdf
@@ -220,9 +237,23 @@ if __name__ == "__main__":
     print(f'Prior distribution is: {args.prior_type}')
 
     if args.datatype == 'spectrum':
-        posterior = Posterior3D_spec(data_obs, config, thickness, periods, sigma = sigma, log_prior = prior.log_prob, 
-                                    num_processes = args.prcs, relative_step_grad = 0.001, wave = 'rayleigh', mode = 1, velocity = 'phase',
-                                    lower = lower, upper = upper)
+
+        print("ndim =", ndim)
+        print("Expected model size =", nx * ny * nz)
+
+        sigma = args.sigma_scale
+
+        posterior = Posterior3D_spec(
+            spectra=spectra,
+            periods=periods,
+            A=A,
+            thick=thickness,
+            sigma=sigma,
+            log_prior=prior.log_prob,
+            wave='rayleigh',
+            mode=1,
+            velocity='phase'
+        )
     else:
         print("Not supported")
 
@@ -281,7 +312,7 @@ if __name__ == "__main__":
                     )
 
     variational.eval()
-    samples = variational.sample(3000)
+    samples = variational.sample(30)
     name = os.path.join(args.basepath, args.outdir, f'{args.flow}_{args.kernel}_samples.npy')
     np.save(name, samples)
 
@@ -298,4 +329,6 @@ if __name__ == "__main__":
                 'model_state_dict': variational.state_dict(),
                 'loss': loss_his,
                 }, name)
+
+    print("Finished")
 
