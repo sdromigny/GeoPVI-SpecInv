@@ -105,9 +105,9 @@ if __name__ == "__main__":
     argparser.add_argument("--kernel_size", default=5, type=int, help='Local covariance kernel size if PSVI is performed')
     argparser.add_argument("--nflow", default=1, type=int, help='number of flows')
     argparser.add_argument("--nsample", default=8, type=int, help='number of samples for MC integration during each iteration')
-    argparser.add_argument("--prcs", default=4, type=int, help='number of processes in parallel to perform forward evaluation')
-    argparser.add_argument("--iterations", default=10000, type=int, help='number of iterations to update variational parameters')
-    argparser.add_argument("--lr", default=0.001, type=float, help='learning rate')
+    argparser.add_argument("--prcs", default=48, type=int, help='number of processes in parallel to perform forward evaluation')
+    argparser.add_argument("--iterations", default=1000, type=int, help='number of iterations to update variational parameters')
+    argparser.add_argument("--lr", default=0.05, type=float, help='learning rate')
     argparser.add_argument("--ini_dist", default='Normal', type=str, help='initial (base) distribution for flows-based model')
     argparser.add_argument("--sigma_scale", default=0.05, type=float, help='scale factor for data noise level')
 
@@ -290,29 +290,39 @@ if __name__ == "__main__":
     start_ite = 0
     # if start_ite != 0, we load the previously saved model checkpoint and resume training
     if args.resume:
-        name = os.path.join(args.basepath, args.outdir, f'{args.flow}_{args.kernel}_model.pt')
-        try:
-            checkpoint = torch.load(name)
-        except:
-            print('Invalid name for model checkpoint!')
+        name = os.path.join(args.basepath, args.outdir,
+                            f'{args.flow}_{args.kernel}_model.pt')
+
+        print("Loading checkpoint:", name)
+
+        if not os.path.exists(name):
+            raise FileNotFoundError(f"Checkpoint not found: {name}")
+
+        checkpoint = torch.load(name, map_location='cpu', weights_only=False)
+
         start_ite = checkpoint['iteration']
         variational.load_state_dict(checkpoint['model_state_dict'])
-        if 'optimizer_state_dict' in checkpoint.keys():
+
+        if 'optimizer_state_dict' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
         loss_his = checkpoint['loss']
-        print(f'Resume training from previous run at iteration {start_ite:4d}\n')
+
+        print(f"Resumed from iteration {start_ite}")
     else:
         print(f'Start training at iteration {start_ite}\n')
 
     # Perform variational inversion
     loss_his.extend(
-                    inversion.update(optimizer = 'torch.optim.Adam', lr = args.lr, n_iter = args.iterations, nsample = args.nsample, 
+                    inversion.update(optimizer = 'torch.optim.Adam', lr = args.lr, n_iter = args.iterations, nsample = args.nsample,  num_processes = args.prcs,relative_step_grad = 0.001,
                                 n_out = args.nout, verbose = args.verbose, save_intermediate_result = args.save_intermediate_result, 
                                 outpath = os.path.join(args.basepath, args.outdir))
                     )
 
+    print("Starting sampling")
+
     variational.eval()
-    samples = variational.sample(30)
+    samples = variational.sample(300)
     name = os.path.join(args.basepath, args.outdir, f'{args.flow}_{args.kernel}_samples.npy')
     np.save(name, samples)
 

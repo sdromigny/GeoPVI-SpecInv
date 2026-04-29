@@ -2,10 +2,10 @@ import numpy as np
 import torch
 from torch.autograd import Function
 from torch.multiprocessing import Pool
-
+from multiprocessing import Pool
 from pysurf96 import surf96     # this needs to be changed if the forward model is intergrated into GeoPVI
 from geopvi.forward.tomo2d.fmm import fm2d
-
+import torch.nn as nn
 MAXIMUM_ITER = 10
 MULTIPLY_FACTOR = 5
 
@@ -93,199 +93,241 @@ def forward_sw(vel, periods, thick, vp_vs = 1.76, relative_step = 0.005, wave = 
     return d_syn, gradient
 
 
-import torch
-import torch.nn as nn
-from torch.autograd import Function
-import numpy as np
-
-
-class ForwardSWFunction(Function):
-
-    @staticmethod
-    def forward(ctx, vs_tensor, periods, thick, wave, mode, velocity):
-        vs_np = vs_tensor.detach().cpu().numpy()
-
-        c_np, J_np = forward_sw(
-            vs_np, periods, thick,
-            wave=wave, mode=mode, velocity=velocity,
-            requires_grad=True         
-        )
-
-        # J_np : (Nperiods, nlayer)
-        ctx.save_for_backward(torch.tensor(J_np, dtype=vs_tensor.dtype))
-        c_tensor = torch.tensor(c_np, dtype=vs_tensor.dtype)
-        return c_tensor
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        # grad_output : (Nperiods,)
-        # J           : (Nperiods, nlayer)
-        (J,) = ctx.saved_tensors
-
-        grad_vs = J.t() @ grad_output       # (nlayer,)
-
-        return grad_vs, None, None, None, None, None
-
-
-def forward_sw_torch(vs_tensor, periods, thick, wave, mode, velocity):
-    """Convenience wrapper so call sites stay clean."""
-    return ForwardSWFunction.apply(vs_tensor, periods, thick, wave, mode, velocity)
-
-
-# ─────────────────────────────────────────────
-#  Main class
-# ─────────────────────────────────────────────
 
 class Posterior3D_spec(nn.Module):
-
+    
     def __init__(self, spectra, periods, A, thick,
-                 sigma=1.0, log_prior=None,
+                 sigma=1.0, log_prior=None,num_processes = 1,relative_step_grad = 0.001,
                  wave='rayleigh', mode=1, velocity='phase',
                  dtype=torch.float64, device='cpu'):
 
         super().__init__()
-
-        self.spectra  = spectra
-        self.periods  = periods
-        self.thick    = thick
+        self.num_processes=num_processes
+        self.periods = periods
+        self.thick = thick
         self.log_prior = log_prior
-        self.wave      = wave
-        self.mode      = mode
-        self.velocity  = velocity
-        self.sigma     = sigma
-        self.dtype     = dtype
-        self.device    = device
+        self.wave = wave
+        self.mode = mode
+        self.velocity = velocity
+        self.sigma = sigma
+        self.Pool = Pool(processes=8)
+        self.relative_step_grad = relative_step_grad
+        self.A_np = A.copy()
+
+        self.dtype = dtype
+        self.device = device
 
         self.Nobs, self.Ngrid = A.shape
         self.Nperiods = len(periods)
 
-        # Register A as a non-trainable buffer so it moves with .to(device)
         self.register_buffer('A', torch.tensor(A, dtype=dtype))
 
-        # Pre-build spectrum tensors for fast interpolation inside the graph
-        # energy_list[p] : (Nperiods, Nc)   c_axes[p] : (Nc,)
+        # store spectra
         self.energy_list = [
-            torch.tensor(s['energy'], dtype=dtype, device=device)   # (Nperiods, Nc)
+            torch.tensor(s['energy'], dtype=dtype, device=device).T
             for s in spectra
         ]
         self.c_axes = [
-            torch.tensor(s['c_axis'], dtype=dtype, device=device)   # (Nc,)
+            torch.tensor(s['c_axis'], dtype=dtype, device=device)  # (Nc,)
             for s in spectra
         ]
+        target_Nc = 50  # try 30–80
 
-
-    def _dispersion_all_cells(self, Vs):
-        """
-        Vs : (Ngrid, nlayer) tensor  (requires_grad should be True upstream)
-
-        Returns
-        ───────
-        c_true : (Ngrid, Nperiods) tensor, connected to autograd graph
-        """
-        rows = []
-        for j in range(self.Ngrid):
-            # ForwardSWFunction bridges NumPy → autograd
-            c_j = forward_sw_torch(
-                Vs[j],                  # (nlayer,) — grad flows through here
-                self.periods, self.thick,
-                self.wave, self.mode, self.velocity
-            )                           # (Nperiods,)
-            rows.append(c_j)
-
-        return torch.stack(rows, dim=0)   # (Ngrid, Nperiods)
-
-
-
-    def _apply_A(self, c_true):
-        """
-        c_true : (Ngrid, Nperiods)
-
-        Returns c_pred : (Nobs, Nperiods)
-        All operations are differentiable.
-        """
-        s_true = 1.0 / c_true               # (Ngrid, Nperiods)
-        s_pred = self.A @ s_true             # (Nobs,  Nperiods)
-        c_pred = 1.0 / s_pred               # (Nobs,  Nperiods)
-        return c_pred
-
-
-
-    def _interp1d_torch(self, c_axis, energy_curve, c_val):
-        """
-        Linear interpolation of energy_curve at c_val.
-        All inputs are scalars / 1-D tensors — stays in the autograd graph.
-
-        c_axis       : (Nc,)
-        energy_curve : (Nc,)
-        c_val        : scalar tensor
-        """
-        # Find bracket index
-        idx = torch.searchsorted(c_axis.contiguous(), c_val.unsqueeze(0)).squeeze()
-        idx = idx.clamp(1, len(c_axis) - 1)
-
-        c0 = c_axis[idx - 1];  c1 = c_axis[idx]
-        e0 = energy_curve[idx - 1];  e1 = energy_curve[idx]
-
-        # Linear weight — differentiable w.r.t. c_val
-        w = (c_val - c0) / (c1 - c0 + 1e-12)
-        e_interp = e0 + w * (e1 - e0)
-        return e_interp
-
-    def _spectrum_loglike(self, c_pred):
-        """
-        c_pred : (Nobs, Nperiods) tensor
-
-        Returns log_likelihood : scalar tensor
-        """
-        log_like = c_pred.new_zeros(1)
+        new_energy_list = []
+        new_c_axes = []
 
         for p in range(self.Nobs):
-            energy = self.energy_list[p]   # (Nperiods, Nc)
-            c_axis = self.c_axes[p]        # (Nc,)
-            e_max  = energy.amax(dim=-1)   # (Nperiods,)  — per-period peak
+            E = self.energy_list[p]   # (Nc, Nperiods)
+            c = self.c_axes[p]        # (Nc,)
 
-            for i in range(self.Nperiods):
-                e_interp = self._interp1d_torch(c_axis, energy[i], c_pred[p, i])
-                log_like = log_like - (e_max[i] - e_interp) / (self.sigma ** 2)
+            Nc = c.shape[0]
 
-        return log_like.squeeze()
+            idx = torch.linspace(0, Nc - 1, target_Nc).long()
 
-    def log_prob(self, Vs_flat):
+            new_energy_list.append(E[idx])
+            new_c_axes.append(c[idx])
+
+        self.energy_list = new_energy_list
+        self.c_axes = new_c_axes
+
+
+
+        self.logZ_list = []
+        sigma_sq = self.sigma ** 2
+        eps = 1e-30
+
+        for p in range(self.Nobs):
+            E_obs = self.energy_list[p]
+            c_axis = self.c_axes[p]
+
+            emax = E_obs.max(dim=0).values
+            integrand = torch.exp(-(emax.unsqueeze(0) - E_obs) / sigma_sq)
+            Z = torch.trapz(integrand, c_axis, dim=0)
+
+            self.logZ_list.append(torch.log(Z + eps))
+
+    # ─────────────────────────────────────────────
+    # Forward model
+    # ─────────────────────────────────────────────
+
+
+
+
+    def solver1D_spec(self, p, vs):
         """
-        Vs_flat : (B, Ngrid * nlayer)
-
-        Returns
-        -------
-        log_posterior : (B,)
+        Single cell forward + gradient (same role as solver1D in dc)
         """
-        B = Vs_flat.shape[0]
+        c_true, J = forward_sw(
+            vs,
+            self.periods,
+            self.thick,
+            relative_step=self.relative_step_grad,
+            wave=self.wave,
+            mode=self.mode,
+            velocity=self.velocity,
+            requires_grad=True
+        )
+
+        return c_true, J
+
+    def dispersion_all_cells(self, Vs):
+        Ngrid = Vs.shape[0]
+
+        if self.num_processes == 1:
+            results = [
+                self.solver1D_spec(j, Vs[j])
+                for j in range(Ngrid)
+            ]
+        else:
+            with Pool(self.num_processes) as pool:
+                results = pool.starmap(
+                    self.solver1D_spec,
+                    [(j, Vs[j]) for j in range(Ngrid)]
+                )
+
+        c_list, J_list = zip(*results)
+
+        c_true = np.stack(c_list)      
+        J = np.stack(J_list)           
+
+        return c_true, J
+
+    def solver3D_spec(self, x):
+        """
+        Input:
+            x: (B, Ngrid * nlayer)
+        Returns:
+            log_like: (B,)
+            grad: (B, Ngrid * nlayer)
+        """
+        if not isinstance(x, np.ndarray):
+            x = x.detach().cpu().numpy()
+
+        B = x.shape[0]
         nlayer = len(self.thick)
 
-        # reshape to (B, Ngrid, nlayer)
-        Vs = Vs_flat.reshape(B, self.Ngrid, nlayer)
+        x = x.reshape(B, self.Ngrid, nlayer)
 
-        logps = []
+        log_like = np.zeros(B)
+        grad = np.zeros_like(x)
 
         for b in range(B):
-            # 1. dispersion
-            c_true = self._dispersion_all_cells(Vs[b])   # (Ngrid, Nperiods)
 
-            # 2. apply A
-            c_pred = self._apply_A(c_true)               # (Nobs, Nperiods)
+            Vs = np.clip(x[b], 0.5, 5.0)
 
-            # 3. likelihood
-            log_like = self._spectrum_loglike(c_pred)    # scalar
+            # --- forward ---
+            c_true, J = self.dispersion_all_cells(Vs)
 
-            # 4. prior
-            if self.log_prior is not None:
-                log_prior = self.log_prior(Vs_flat)   # (B,)
-                return log_like + log_prior
-            else:
-                log_post = log_like
+            # apply A
+            s_true = 1.0 / c_true
+            s_pred = self.A_np @ s_true
+            c_pred = 1.0 / s_pred
 
-            logps.append(log_post)
+            # --- likelihood ---
+            dlogp_dc_pred = np.zeros_like(c_pred)
+            lp_total = 0.0
 
-        return torch.stack(logps)   # (B,)
+            for p in range(self.Nobs):
+                lp, grad_c = self._spectrum_loglike_single_numpy(
+                    p, c_pred[p]
+                )
+                lp_total += lp
+                dlogp_dc_pred[p] = grad_c
+
+            # --- chain rule ---
+            dc_pred_ds_pred = -1.0 / (s_pred ** 2)
+            ds_true_dc_true = -1.0 / (c_true ** 2)
+
+            dlogp_ds_pred = dlogp_dc_pred * dc_pred_ds_pred
+            dlogp_ds_true = self.A_np.T @ dlogp_ds_pred
+            dlogp_dc_true = dlogp_ds_true * ds_true_dc_true
+
+            # --- push through Jacobian ---
+            for j in range(self.Ngrid):
+                grad[b, j] = J[j].T @ dlogp_dc_true[j]
+
+            g = grad[b].reshape(-1)
+            print(
+                f"grad stats | "
+                f"mean={g.mean():.2e}, "
+                f"std={g.std():.2e}, "
+                f"max={g.max():.2e}, "
+                f"min={g.min():.2e}, "
+                f"norm={np.linalg.norm(g):.2e}"
+            )
+
+            log_like[b] = lp_total
+
+        return log_like, grad.reshape(B, -1)
+
+    def _apply_A(self, c_true):
+        s_true = 1.0 / c_true
+        s_pred = self.A_np @ s_true
+        return 1.0 / s_pred 
+
+    # ─────────────────────────────────────────────
+    # Log-likelihood
+    # ─────────────────────────────────────────────
+    def _spectrum_loglike_single_numpy(self, p, c_pred):
+        E_obs = self.energy_list[p].cpu().numpy()
+        c_axis = self.c_axes[p].cpu().numpy()
+
+        sigma_sq = self.sigma ** 2
+
+        emax = E_obs.max(axis=0)
+
+        idx = np.searchsorted(c_axis, c_pred)
+        idx = np.clip(idx, 1, len(c_axis) - 1)
+
+        x0 = c_axis[idx - 1]
+        x1 = c_axis[idx]
+
+        y0 = E_obs[idx - 1, np.arange(self.Nperiods)]
+        y1 = E_obs[idx,     np.arange(self.Nperiods)]
+
+        t = (c_pred - x0) / (x1 - x0 + 1e-12)
+        epred = y0 + t * (y1 - y0)
+
+        dedc = (y1 - y0) / (x1 - x0 + 1e-12)
+
+        log_num = -(emax - epred) / sigma_sq
+        dlogp_dc = dedc / sigma_sq
+
+        logZ = self.logZ_list[p].cpu().numpy()
+
+        return (log_num - logZ).mean(), dlogp_dc
+    # ─────────────────────────────────────────────
+    # Log posterior
+    # ─────────────────────────────────────────────
+
+    def log_prob(self, x):
+        log_like = ForwardModel.apply(x, self.solver3D_spec)
+
+        if self.log_prior is not None:
+            log_prior = self.log_prior(x)
+            return log_like + log_prior
+
+        return log_like
 
 
 class Posterior3D_dc():

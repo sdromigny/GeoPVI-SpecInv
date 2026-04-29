@@ -165,7 +165,7 @@ if __name__ == "__main__":
         fmm_config_name = args.basepath + 'input/' + args.config
         config = configparser.ConfigParser()
         config._interpolation = configparser.ExtendedInterpolation()
-        config.read(fmm_config_name)
+        config.read("/home/sixtine/Documents/SANT/GeoPVI-SpecInv/examples/swi3d/input/config_grid3d.ini")
 
     # create output folder
     Path(args.basepath + args.outdir).mkdir(parents=True, exist_ok=True)
