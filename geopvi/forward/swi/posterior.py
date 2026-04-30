@@ -110,7 +110,7 @@ class Posterior3D_spec(nn.Module):
         self.mode = mode
         self.velocity = velocity
         self.sigma = sigma
-        self.Pool = Pool(processes=8)
+        # self.Pool = Pool(processes=8)
         self.relative_step_grad = relative_step_grad
         self.A_np = A.copy()
 
@@ -267,14 +267,9 @@ class Posterior3D_spec(nn.Module):
                 grad[b, j] = J[j].T @ dlogp_dc_true[j]
 
             g = grad[b].reshape(-1)
-            print(
-                f"grad stats | "
-                f"mean={g.mean():.2e}, "
-                f"std={g.std():.2e}, "
-                f"max={g.max():.2e}, "
-                f"min={g.min():.2e}, "
-                f"norm={np.linalg.norm(g):.2e}"
-            )
+            norm = np.linalg.norm(g)
+            if norm > 1e3:  # or tune this threshold
+                grad[b] = grad[b] * (1e3 / norm)
 
             log_like[b] = lp_total
 
@@ -289,6 +284,7 @@ class Posterior3D_spec(nn.Module):
     # Log-likelihood
     # ─────────────────────────────────────────────
     def _spectrum_loglike_single_numpy(self, p, c_pred):
+        
         E_obs = self.energy_list[p].cpu().numpy()
         c_axis = self.c_axes[p].cpu().numpy()
 
@@ -314,6 +310,15 @@ class Posterior3D_spec(nn.Module):
         dlogp_dc = dedc / sigma_sq
 
         logZ = self.logZ_list[p].cpu().numpy()
+
+        if not np.isfinite(log_num).all():
+            print("log_num exploded")
+
+        if not np.isfinite(logZ).all():
+            print("logZ exploded")
+
+        if not np.isfinite(dlogp_dc).all():
+            print("grad exploded")
 
         return (log_num - logZ).mean(), dlogp_dc
     # ─────────────────────────────────────────────

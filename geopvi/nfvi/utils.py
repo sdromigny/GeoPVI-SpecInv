@@ -303,6 +303,24 @@ class MLP(nn.Module):
     def forward(self, x):
         return self.network(x)
 
+class MLP(nn.Module):
+    def __init__(self, in_dim, out_dim, hidden_dim):
+        super().__init__()
+
+        dims = [in_dim] + hidden_dim
+
+        layers = []
+        for h0, h1 in zip(dims, dims[1:]):
+            layers.append(nn.Linear(h0, h1))
+            layers.append(nn.ReLU())
+
+        layers.append(nn.Linear(dims[-1], out_dim))
+
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.net(x)
+
 
 class CNN1D(nn.Module):
     """

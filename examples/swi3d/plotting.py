@@ -1,12 +1,12 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from utils_synth import build_synthetic_vs, build_checkerboard_vs
 
 
-samples=np.load("/home/sixtine/Documents/SANT/GeoPVI-SpecInv/examples/specinv/output_new_checkerboard/samples_intermediate_ite1800.npy")
+
+samples=np.load("/home/sixtine/Documents/SANT/GeoPVI-SpecInv/examples/swi3d/output/samples_intermediate_ite8000.npy")
 
 nsamples, ndim = samples.shape
-nx, ny, nz = 10, 10, 20
+nx, ny, nz = 29, 28, 20
 
 Vs = samples.reshape(nsamples, nx, ny, nz)
 
@@ -26,16 +26,14 @@ plt.savefig("mean_vs_slice.png")
 
 
 # Reshape
-samples_3d = samples.reshape(200, nx, ny, nz)
+samples_3d = samples.reshape(2000, nx, ny, nz)
 
 # Mean and std of posterior
 mean_model = samples_3d.mean(axis=0)   # (nx, ny, nz)
 std_model  = samples_3d.std(axis=0)    # uncertainty
 
 # Compare to true
-Vs_true = build_checkerboard_vs(10, 10, 20)
-
-# Vs_true = build_synthetic_vs(10, 10, 20)
+Vs_true = np.load('/home/sixtine/Documents/SANT/GeoPVI-SpecInv/examples/swi3d/input/vs3d_true_xyz.npy')
 residual = mean_model - Vs_true
 
 print(f"RMSE: {np.sqrt((residual**2).mean()):.4f} km/s")
@@ -43,7 +41,7 @@ print(f"Max error: {np.abs(residual).max():.4f} km/s")
 print(f"Mean uncertainty: {std_model.mean():.4f} km/s")
 
 fig, axes = plt.subplots(3, nz//4, figsize=(16, 10))
-depths = [ 0, 1, 2, 5, 10]  # layer indices
+depths = [5, 10, 15]  # layer indices
 
 for i, iz in enumerate(depths):
     axes[0,i].imshow(Vs_true[:,:,iz].T, origin='lower', vmin=1.5, vmax=3.5)
@@ -56,27 +54,3 @@ for i, iz in enumerate(depths):
     axes[2,i].set_title(f'Uncertainty, layer {iz}')
 
 plt.savefig("compare.png")
-
-# Where is the low velocity anomaly strongest?
-iz_mid = 10  # mid-depth
-true_min = Vs_true[:,:,iz_mid].min()
-rec_min  = mean_model[:,:,iz_mid].min()
-print(f"True anomaly minimum:     {true_min:.3f} km/s")
-print(f"Recovered anomaly minimum:{rec_min:.3f} km/s")
-print(f"Amplitude recovery:       {(rec_min - 2.5)/(true_min - 2.5)*100:.1f}%")
-
-Vs_true = build_synthetic_vs(10, 10, 20)
-fig, axes = plt.subplots(4, 5, figsize=(20, 16))
-
-for iz in range(20):
-    ax = axes[iz//5, iz%5]
-    diff = mean_model[:,:,iz] - Vs_true[:,:,iz]
-    im = ax.imshow(diff.T, origin='lower', 
-                   cmap='RdBu', vmin=-1.5, vmax=1.5)
-    ax.set_title(f'Layer {iz}, RMSE={np.sqrt((diff**2).mean()):.2f}')
-    plt.colorbar(im, ax=ax)
-
-plt.suptitle('Residual (recovered - true) per depth layer')
-plt.tight_layout()
-plt.savefig('residual_by_depth.png')
-

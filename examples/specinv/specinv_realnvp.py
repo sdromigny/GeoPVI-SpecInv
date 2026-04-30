@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-
+import matplotlib.pyplot as plt
 import os
 from pathlib import Path
 from argparse import ArgumentParser
@@ -10,7 +10,7 @@ from datetime import datetime
 import glob
 
 from geopvi.nfvi.models import FlowsBasedDistribution, VariationalInversion
-from geopvi.nfvi.flows import Real2Constr, Constr2Real, Linear
+from geopvi.nfvi.flows import Real2Constr, Constr2Real, RealNVP
 from geopvi.forward.swi.posterior import Posterior3D_spec
 from geopvi.utils import smooth_matrix_3D as smooth_matrix
 
@@ -100,14 +100,13 @@ if __name__ == "__main__":
     argparser = ArgumentParser(description='3D Bayesian surface wave dispersion inversion using GeoPVI')
     argparser.add_argument("--basepath", metavar='basepath', type=str, help='Project path', default='./')
 
-    argparser.add_argument("--flow", default='Linear', type=str, help='Flows used to perform inversion')
-    argparser.add_argument("--kernel", default='structured', type=str, help='Covariance kernel type if Linear flow is used')
-    argparser.add_argument("--kernel_size", default=5, type=int, help='Local covariance kernel size if PSVI is performed')
-    argparser.add_argument("--nflow", default=1, type=int, help='number of flows')
+    argparser.add_argument("--flow", default='RealNVP', type=str, help='Flows used to perform inversion')
+    argparser.add_argument("--nflow", default=2, type=int, help='number of flows')
+
     argparser.add_argument("--nsample", default=8, type=int, help='number of samples for MC integration during each iteration')
-    argparser.add_argument("--prcs", default=8, type=int, help='number of processes in parallel to perform forward evaluation')
-    argparser.add_argument("--iterations", default=6000, type=int, help='number of iterations to update variational parameters')
-    argparser.add_argument("--lr", default=0.01, type=float, help='learning rate')
+    argparser.add_argument("--prcs", default=10, type=int, help='number of processes in parallel to perform forward evaluation')
+    argparser.add_argument("--iterations", default=3000, type=int, help='number of iterations to update variational parameters')
+    argparser.add_argument("--lr", default=0.001, type=float, help='learning rate')
     argparser.add_argument("--ini_dist", default='Normal', type=str, help='initial (base) distribution for flows-based model')
     argparser.add_argument("--sigma_scale", default=1, type=float, help='scale factor for data noise level')
 
@@ -127,7 +126,7 @@ if __name__ == "__main__":
     # argparser.add_argument("--datafile", default='stimes.dat', type=str, help='filename for observed dataset')
 
     argparser.add_argument("--flow_init_name", type=str, default='none', help='Parameter filename for flow initial value')
-    argparser.add_argument("--outdir", type=str, default='output_new_checkerboard/', help='folder path (relative to basepath) for output files')
+    argparser.add_argument("--outdir", type=str, default='output_nvp/', help='folder path (relative to basepath) for output files')
 
     argparser.add_argument("--verbose", default=True, type=bool, help='Output and print intermediate inversion results')
     argparser.add_argument("--save_intermediate_result", default=True, type=bool,
@@ -151,17 +150,16 @@ if __name__ == "__main__":
         print(f'Transform (flow) used: {args.nflow} {args.flow} flow')
     else:
         print(f'Transform (flow) used: {args.nflow} {args.flow} flows')
-    if args.flow == 'Linear':
-        print(f'Covariance of Gaussian kernel is: {args.kernel}')
-        if args.kernel == 'structured':
-            print(f'Structured Gaussian kernel size is: {args.kernel_size}')
+    if args.flow == 'RealNVP':
+        print(f'Using RealNVP')
+
     print(f'The initial distribution is {args.ini_dist} distribution\n')
 
 
     # create output folder
     Path(args.basepath + args.outdir).mkdir(parents=True, exist_ok=True)
 
-    config_name = args.basepath + 'input_new_checkerboard/' + args.config
+    config_name = args.basepath + 'input/' + args.config
     config = configparser.ConfigParser()
     config._interpolation = configparser.ExtendedInterpolation()
     config.read(config_name)
@@ -174,7 +172,7 @@ if __name__ == "__main__":
     if args.datatype == 'spectrum':
         print('Use spectrum for inversion\n')
 
-        spec_dir = os.path.join(args.basepath, "input_new_checkerboard/spectra_nodes")
+        spec_dir = os.path.join(args.basepath, "input/spectra_nodes")
 
         index = np.load(os.path.join(spec_dir, "index.npy"), allow_pickle=True)
 
@@ -195,7 +193,7 @@ if __name__ == "__main__":
         indices = np.array(indices)
 
         # Load A
-        A_full = np.load(os.path.join(args.basepath, "input_new_checkerboard", "A_matrix.npy"))
+        A_full = np.load(os.path.join(args.basepath, "input", "A_matrix.npy"))
         A = A_full[indices]
 
         # Periods
@@ -205,7 +203,7 @@ if __name__ == "__main__":
 
 
     # define Bayesian prior and posterior pdf
-    prior_bounds = np.loadtxt(args.basepath + 'input_new_checkerboard/' + args.prior_param)
+    prior_bounds = np.loadtxt(args.basepath + 'input/' + args.prior_param)
     thickness = prior_bounds[:,0]
     nz = len(thickness)
 
@@ -255,6 +253,7 @@ if __name__ == "__main__":
             velocity='phase',
             num_processes=args.prcs
         )
+
     else:
         print("Not supported")
 
@@ -263,14 +262,14 @@ if __name__ == "__main__":
     param = None
     if args.flow_init_name != 'none':
         # load initial value for flows
-        filename = os.path.join(args.basepath, 'input_new_checkerboard/', args.flow_init_name)
+        filename = os.path.join(args.basepath, 'input/', args.flow_init_name)
         param = np.load(filename).flatten()
-        print(f'Load basepath/input_new_checkerboard/{args.flow_init_name} as initial parameter value for flows model')
-    if args.flow == 'Linear':
-        cov_template = np.ones((args.kernel_size, args.kernel_size, args.kernel_size))
-        off_diag_mask = get_offdiag_mask(cov_template, ndim, nx = nx, ny = ny, nz = nz)
-        flows = [flow(dim = ndim, kernel = args.kernel, mask = off_diag_mask, param = param)
-                    for _ in range(args.nflow)]
+        print(f'Load basepath/input/{args.flow_init_name} as initial parameter value for flows model')
+    if args.flow == 'RealNVP':
+        flows = [
+            RealNVP(dim=ndim, hidden_dim=[64, 64])
+            for _ in range(args.nflow)
+        ]
 
     # if the initial distribution of flow model is a Uniform distribution, 
     # then add a flow to transform from constrained to real space
@@ -292,7 +291,7 @@ if __name__ == "__main__":
     # if start_ite != 0, we load the previously saved model checkpoint and resume training
     if args.resume:
         name = os.path.join(args.basepath, args.outdir,
-                            f'{args.flow}_{args.kernel}_model.pt')
+                            f'{args.flow}_model.pt')
 
         print("Loading checkpoint:", name)
 
@@ -324,17 +323,17 @@ if __name__ == "__main__":
 
     variational.eval()
     samples = variational.sample(2000)
-    name = os.path.join(args.basepath, args.outdir, f'{args.flow}_{args.kernel}_samples.npy')
+    name = os.path.join(args.basepath, args.outdir, f'{args.flow}_samples.npy')
     np.save(name, samples)
 
-    param = get_flow_param(variational.flows[-2])
-    name = os.path.join(args.basepath, args.outdir, f'{args.flow}_{args.kernel}_parameter.npy')
-    np.save(name, param)
+    # param = get_flow_param(variational.flows[-2])
+    # name = os.path.join(args.basepath, args.outdir, f'{args.flow}_parameter.npy')
+    # np.save(name)
 
-    name = os.path.join(args.basepath, args.outdir, f'{args.flow}_{args.kernel}_loss.txt')
+    name = os.path.join(args.basepath, args.outdir, f'{args.flow}_loss.txt')
     np.savetxt(name, loss_his)
 
-    name = os.path.join(args.basepath, args.outdir, f'{args.flow}_{args.kernel}_model.pt')
+    name = os.path.join(args.basepath, args.outdir, f'{args.flow}_model.pt')
     torch.save({
                 'iteration': (len(loss_his)),
                 'model_state_dict': variational.state_dict(),

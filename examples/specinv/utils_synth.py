@@ -1,3 +1,5 @@
+
+import numpy as np
 import numpy
 import numpy as np
 
@@ -346,3 +348,79 @@ def build_A_subarrays(
             A[p_idx] = weights / weights.sum()
 
     return A, centers, pair_counts
+
+def build_spectrum(c_obs, c_axis, sigma_c):
+    """
+    c_obs: (Nperiods,)
+    c_axis: (Nc,)
+    """
+    Nperiods = len(c_obs)
+    Nc = len(c_axis)
+
+    E = np.zeros((Nperiods, Nc))
+
+    for i in range(Nperiods):
+        E[i] = np.exp(-0.5 * ((c_axis - c_obs[i]) / sigma_c[i])**2)
+
+    return E
+
+# Load true Vs model
+# Vs_true=np.load("/home/sixtine/Documents/SANT/GeoPVI-SpecInv/examples/specinv/input/vs3d_true_xyz.npy")
+
+
+def build_synthetic_vs(nx=29, ny=28, nz=20):
+    # --- coordinates ---
+    x = np.linspace(-1, 1, nx)
+    y = np.linspace(-1, 1, ny)
+    z = np.linspace(0, 1, nz)   # depth normalized
+
+    X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+
+    # --- background: increasing with depth ---
+    Vs_bg = 2.0 + 1.0 * Z   # from ~2.0 to ~3.0 km/s
+
+    # --- low velocity anomaly (centered) ---
+    low_anomaly = -1 * np.exp(
+        -((X/0.7)**2 + (Y/0.7)**2 + ((Z-0.5)/0.3)**2)
+    )
+
+    # --- high velocity anomaly (slightly offset) ---
+    high_anomaly = +0.8 * np.exp(
+        -(((X-0.4)/0.7)**2 + ((Y+0.3)/0.7)**2 + ((Z-0.6)/0.4)**2)
+    )
+
+    Vs = Vs_bg + low_anomaly + high_anomaly
+
+    return Vs
+
+import numpy as np
+
+def build_checkerboard_vs(nx=29, ny=28, nz=20,
+                         v_low=1.8, v_high=3.2,
+                         n_blocks_x=5, n_blocks_y=5, n_blocks_z=4):
+    """
+    3D checkerboard Vs model
+    """
+
+    # base grid
+    Vs = np.zeros((nx, ny, nz))
+
+    # block sizes
+    bx = nx // n_blocks_x
+    by = ny // n_blocks_y
+    bz = nz // n_blocks_z
+
+    for i in range(nx):
+        for j in range(ny):
+            for k in range(nz):
+                ix = i // bx
+                iy = j // by
+                iz = k // bz
+
+                # alternating pattern
+                if (ix + iy + iz) % 2 == 0:
+                    Vs[i, j, k] = v_low
+                else:
+                    Vs[i, j, k] = v_high
+
+    return Vs

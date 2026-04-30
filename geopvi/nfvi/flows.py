@@ -328,56 +328,114 @@ class Radial(nn.Module):
         raise NotImplementedError("Radial flow has no algebraic inverse.")
 
 
-class RealNVP(nn.Module):
-    """
-    RealNVP: real-valued non-volume preserving flow
-    Calling one RealNVP layer is actually applying two coupling layers
+# class RealNVP(nn.Module):
+#     """
+#     RealNVP: real-valued non-volume preserving flow
+#     Calling one RealNVP layer is actually applying two coupling layers
 
-    [Dinh et. al. 2017 - ICLR]
-    """
-    def __init__(self, dim, hidden_dim = [100], base_network = MLP):
-        """
-        hidden_dim: a list defining NN parameters for the base network 
-                    used to define the 1-2-1 transform in the coupling layer
-        base_network: can be MLP (multiple layer perceptron) or CNN
-        """
+#     [Dinh et. al. 2017 - ICLR]
+#     """
+#     def __init__(self, dim, hidden_dim = [100], base_network = MLP):
+#         """
+#         hidden_dim: a list defining NN parameters for the base network 
+#                     used to define the 1-2-1 transform in the coupling layer
+#         base_network: can be MLP (multiple layer perceptron) or CNN
+#         """
+#         super().__init__()
+#         self.dim = dim
+#         self.t0 = base_network(dim - dim // 2, dim // 2, hidden_dim)
+#         self.s0 = base_network(dim - dim // 2, dim // 2, hidden_dim)
+#         self.t1 = base_network(dim // 2, dim - dim // 2, hidden_dim)
+#         self.s1 = base_network(dim // 2, dim - dim // 2, hidden_dim)
+
+#     def forward(self, x, train = True):
+#         # z = torch.zeros_like(x)
+#         # x0, x1 = x[:,::2], x[:,1::2]
+#         x0, x1 = x.chunk(2, dim = 1)
+#         t0_transformed = self.t0(x0)
+#         s0_transformed = self.s0(x0)
+#         x1 = t0_transformed + x1 * torch.exp(s0_transformed)
+#         t1_transformed = self.t1(x1)
+#         s1_transformed = self.s1(x1)
+#         x0 = t1_transformed + x0 * torch.exp(s1_transformed)
+#         log_det = torch.sum(s0_transformed, dim=1) + \
+#                   torch.sum(s1_transformed, dim=1)
+
+#         return torch.cat([x0, x1], dim = 1), log_det
+
+#     def inverse(self, z):
+#         # x = torch.zeros_like(z)
+#         # z0, z1 = z[:,::2], z[:,1::2]
+#         z0, z1 = z.chunk(2, dim = 1)
+#         t1_transformed = self.t1(z1)
+#         s1_transformed = self.s1(z1)
+#         z0 = (z0 - t1_transformed) * torch.exp(-s1_transformed)
+#         t0_transformed = self.t0(z0)
+#         s0_transformed = self.s0(z0)
+#         z1 = (z1 - t0_transformed) * torch.exp(-s0_transformed)
+#         log_det = torch.sum(-s0_transformed, dim=1) + \
+#                   torch.sum(-s1_transformed, dim=1)
+        
+#         return torch.cat([z0, z1], dim = 1), log_det
+
+
+
+class AffineCoupling(nn.Module):
+    def __init__(self, dim, mask, hidden_dim=128):
         super().__init__()
         self.dim = dim
-        self.t0 = base_network(dim - dim // 2, dim // 2, hidden_dim)
-        self.s0 = base_network(dim - dim // 2, dim // 2, hidden_dim)
-        self.t1 = base_network(dim // 2, dim - dim // 2, hidden_dim)
-        self.s1 = base_network(dim // 2, dim - dim // 2, hidden_dim)
+        self.register_buffer("mask", mask)
+        self.net = MLP(dim, 2 * dim, hidden_dim=hidden_dim)
 
-    def forward(self, x, train = True):
-        # z = torch.zeros_like(x)
-        # x0, x1 = x[:,::2], x[:,1::2]
-        x0, x1 = x.chunk(2, dim = 1)
-        t0_transformed = self.t0(x0)
-        s0_transformed = self.s0(x0)
-        x1 = t0_transformed + x1 * torch.exp(s0_transformed)
-        t1_transformed = self.t1(x1)
-        s1_transformed = self.s1(x1)
-        x0 = t1_transformed + x0 * torch.exp(s1_transformed)
-        log_det = torch.sum(s0_transformed, dim=1) + \
-                  torch.sum(s1_transformed, dim=1)
+    def forward(self, x):
+        x_masked = x * self.mask
+        st = self.net(x_masked)
+        s, t = st.chunk(2, dim=-1)
 
-        return torch.cat([x0, x1], dim = 1), log_det
+        # stability: keep scale bounded
+        s = torch.tanh(s) * 1.5
 
-    def inverse(self, z):
-        # x = torch.zeros_like(z)
-        # z0, z1 = z[:,::2], z[:,1::2]
-        z0, z1 = z.chunk(2, dim = 1)
-        t1_transformed = self.t1(z1)
-        s1_transformed = self.s1(z1)
-        z0 = (z0 - t1_transformed) * torch.exp(-s1_transformed)
-        t0_transformed = self.t0(z0)
-        s0_transformed = self.s0(z0)
-        z1 = (z1 - t0_transformed) * torch.exp(-s0_transformed)
-        log_det = torch.sum(-s0_transformed, dim=1) + \
-                  torch.sum(-s1_transformed, dim=1)
-        
-        return torch.cat([z0, z1], dim = 1), log_det
+        y = x_masked + (1.0 - self.mask) * (x * torch.exp(s) + t)
+        log_det = ((1.0 - self.mask) * s).sum(dim=-1)
+        return y, log_det
 
+class Permute(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.perm = torch.randperm(dim)
+
+    def forward(self, x):
+        return x[:, self.perm], 0
+
+class RealNVP(nn.Module):
+    def __init__(self, dim, n_layers=8, hidden_dim=128):
+        super().__init__()
+        masks = []
+        block_size = 50  # tune this
+
+        for i in range(n_layers):
+            masks.append(self.make_block_mask(dim, block_size, shift=i % block_size))
+
+        self.layers = nn.ModuleList()
+
+        for i in range(n_layers):
+            self.layers.append(AffineCoupling(dim, masks[i], hidden_dim))
+            self.layers.append(Permute(dim))
+
+    @staticmethod
+    def make_block_mask(dim, block_size, shift=0):
+        mask = torch.zeros(dim)
+        for i in range(shift, dim, 2 * block_size):
+            mask[i:i+block_size] = 1
+        return mask
+
+    def forward(self, z, train=True):
+        x = z
+        log_det_total = torch.zeros(z.shape[0], device=z.device)
+        for layer in self.layers:
+            x, log_det = layer(x)
+            log_det_total = log_det_total + log_det
+        return x, log_det_total
 
 class SIAF(nn.Module):
     """
